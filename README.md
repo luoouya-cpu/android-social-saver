@@ -10,7 +10,8 @@
 - 自动创建 `收集/社交媒体` 目录
 - 自动写入 YAML、标签和原始链接
 - 按原始 URL 去重
-- 当前接收分享文本中的链接，尚未下载图片或视频
+- 可选连接 NAS 解析服务，自动提取正文、图片和视频
+- 解析失败时仍保底保存原始链接
 
 ## Android 分享入口
 
@@ -21,6 +22,34 @@ obsidian://save-social?url=URL编码后的链接
 ```
 
 安装 companion APK 后，在小红书/抖音中点“分享”→“保存到 Obsidian”即可。
+
+## 配置 NAS 解析服务
+
+解析服务位于 `parser-service`，适合部署到 NAS Docker。第一阶段要求手机和 NAS 在同一 Wi‑Fi：
+
+```bash
+cd parser-service
+cp .env.example .env
+# 编辑 .env，设置一个随机 API_TOKEN
+docker compose up -d --build
+```
+
+在 Obsidian 插件设置中填写：
+
+- 解析服务地址：`http://NAS内网IP:3000`
+- API Token：`.env` 中的 `API_TOKEN`
+- 下载图片/视频：按需开启
+- 视频大小上限：默认 200 MB
+
+服务健康检查：
+
+```text
+http://NAS内网IP:3000/health
+```
+
+当解析服务地址留空时，插件继续使用原来的链接保存模式。解析服务不可用或平台要求登录时，插件会创建 `status: needs-review` 的保底笔记。
+
+NAS 部署前可执行 `uname -m` 检查架构。`x86_64` 兼容性最好；ARM NAS 需要先确认 NAS 的 Docker/Chromium 支持情况。
 
 ## 构建
 

@@ -1,0 +1,12 @@
+services:
+  social-capture:
+    build: .
+    container_name: social-capture
+    init: true
+    ipc: host
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}

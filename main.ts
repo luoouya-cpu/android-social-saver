@@ -1,33 +1,77 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, requestUrl, Setting, TFile, normalizePath } from "obsidian";
+
+type Platform = "小红书" | "抖音" | "其他";
+
+interface CaptureMedia {
+  id: string;
+  type: "image" | "video";
+  url: string;
+  filename: string;
+  size?: number;
+  mimeType?: string;
+}
+
+interface CaptureResponse {
+  status: "completed";
+  jobId: string;
+  platform: "小红书" | "抖音";
+  canonicalUrl: string;
+  title: string;
+  author: string;
+  content: string;
+  publishedAt: string;
+  tags: string[];
+  media: CaptureMedia[];
+  warnings: string[];
+}
 
 interface SocialSaverSettings {
   folder: string;
   tags: string;
   includeTimestamp: boolean;
+  parserUrl: string;
+  apiToken: string;
+  downloadImages: boolean;
+  downloadVideos: boolean;
+  maxVideoMb: number;
+  captureTimeoutSeconds: number;
 }
 
 const DEFAULT_SETTINGS: SocialSaverSettings = {
   folder: "收集/社交媒体",
   tags: "收藏,待整理",
-  includeTimestamp: true
+  includeTimestamp: true,
+  parserUrl: "",
+  apiToken: "",
+  downloadImages: true,
+  downloadVideos: true,
+  maxVideoMb: 200,
+  captureTimeoutSeconds: 120
 };
 
-function platformFor(url: string): "小红书" | "抖音" | "其他" {
+function platformFor(url: string): Platform {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
     if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") ||
         host === "xhslink.com" || host.endsWith(".xhslink.com") ||
         host === "xhslink.cn" || host.endsWith(".xhslink.cn")) return "小红书";
     if (host === "douyin.com" || host.endsWith(".douyin.com") ||
         host === "iesdouyin.com" || host.endsWith(".iesdouyin.com")) return "抖音";
   } catch {
-    // The caller validates the URL and reports a useful error.
+    // The caller reports the invalid-link notice.
   }
   return "其他";
 }
 
+function extractUrl(rawUrl: string): string | undefined {
+  const match = rawUrl.match(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
+  if (!match) return undefined;
+  const candidate = match[0].replace(/[),.;!?，。！？]+$/, "");
+  return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+}
+
 function safeName(value: string): string {
-  return value.replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "未命名收藏";
+  return value.replace(/[\\/:*?"<>|#^[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || "未命名收藏";
 }
 
 function dateParts(date = new Date()): { day: string; stamp: string } {
@@ -35,6 +79,14 @@ function dateParts(date = new Date()): { day: string; stamp: string } {
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   const stamp = `${day} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   return { day, stamp };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function apiBase(value: string): string {
+  return value.trim().replace(/\/+$/, "");
 }
 
 export default class AndroidSocialSaver extends Plugin {
@@ -62,7 +114,6 @@ export default class AndroidSocialSaver extends Plugin {
       }
     });
 
-    // Android 分享入口通过 obsidian://save-social?url=... 调用此处理器。
     this.registerObsidianProtocolHandler("save-social", async (params) => {
       const url = params.url ?? params.text;
       if (url) await this.saveUrl(url);
@@ -73,69 +124,202 @@ export default class AndroidSocialSaver extends Plugin {
   }
 
   async saveUrl(rawUrl: string): Promise<void> {
-    // Android 分享可能连续触发，串行化可以避免两个请求同时创建同一个文件。
     this.saveQueue = this.saveQueue.then(() => this.saveUrlInternal(rawUrl)).catch((error: unknown) => {
       console.error("保存社交媒体链接失败", error);
-      new Notice("保存失败，请检查保存目录和 Obsidian 权限");
+      new Notice("保存失败，请检查保存目录、解析服务和 Obsidian 权限");
     });
     return this.saveQueue;
   }
 
   private async saveUrlInternal(rawUrl: string): Promise<void> {
-    // 小红书复制链接有时会省略协议，例如 xhslink.com/a/xxxx。
-    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
-    let url = match?.[0]?.replace(/[),.;!?，。！？]+$/, "");
-    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
+    const url = extractUrl(rawUrl);
     if (!url) {
       new Notice("未找到有效链接");
       return;
     }
-
     const platform = platformFor(url);
     if (platform === "其他") {
       new Notice("目前只支持小红书和抖音链接");
       return;
     }
-
     if (await this.hasSavedUrl(url)) {
       new Notice("这个链接已经保存过了");
       return;
     }
 
-    const { day, stamp } = dateParts();
-    const folder = normalizePath(this.settings.folder.trim() || "收集/社交媒体");
-    await this.ensureFolder(folder);
-    const baseName = safeName(`${platform}-${day}-${url.slice(-12)}`);
-    let path = normalizePath(`${folder}/${baseName}.md`);
-    let suffix = 2;
-    while (this.app.vault.getAbstractFileByPath(path)) {
-      path = normalizePath(`${folder}/${baseName}-${suffix}.md`);
-      suffix += 1;
+    if (apiBase(this.settings.parserUrl)) {
+      new Notice("正在解析正文和媒体，请稍候…");
+      try {
+        const capture = await this.captureRemote(url);
+        await this.createCapturedNote(url, capture);
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "解析服务失败";
+        console.error("解析服务失败", error);
+        await this.createLinkNote(url, platform, message);
+        new Notice(`解析失败，已保存原始链接：${message}`);
+        return;
+      }
     }
 
+    await this.createLinkNote(url, platform);
+  }
+
+  private async captureRemote(url: string): Promise<CaptureResponse> {
+    const base = apiBase(this.settings.parserUrl);
+    const headers: Record<string, string> = {};
+    if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
+    const start = await requestUrl({
+      url: `${base}/v1/captures`,
+      method: "POST",
+      contentType: "application/json",
+      headers,
+      body: JSON.stringify({ url }),
+      throw: false
+    });
+    if (start.status >= 400) throw new Error(this.apiError(start.json, start.status));
+    const created = start.json as { jobId?: string; status?: string };
+    if (!created.jobId) throw new Error("解析服务没有返回任务编号");
+    const deadline = Date.now() + Math.max(10, this.settings.captureTimeoutSeconds) * 1000;
+    while (Date.now() < deadline) {
+      await sleep(2000);
+      const response = await requestUrl({ url: `${base}/v1/captures/${encodeURIComponent(created.jobId)}`, headers, throw: false });
+      if (response.status >= 400) throw new Error(this.apiError(response.json, response.status));
+      const status = response.json as { status?: string; error?: string; media?: CaptureMedia[] };
+      if (status.status === "completed" && Array.isArray(status.media)) return status as CaptureResponse;
+      if (status.status === "failed") throw new Error(status.error || "解析服务返回失败");
+    }
+    throw new Error("解析超时");
+  }
+
+  private apiError(value: unknown, status: number): string {
+    if (value && typeof value === "object" && "error" in value) return String((value as { error: unknown }).error);
+    return `解析服务 HTTP ${status}`;
+  }
+
+  private async createCapturedNote(originalUrl: string, capture: CaptureResponse): Promise<void> {
+    const { day, stamp } = dateParts();
+    const root = normalizePath(this.settings.folder.trim() || "收集/社交媒体");
+    await this.ensureFolder(root);
+    const base = safeName(`${capture.platform}-${day}-${capture.title || "收藏"}`);
+    let itemFolder = normalizePath(`${root}/${base}`);
+    let suffix = 2;
+    while (this.app.vault.getAbstractFileByPath(itemFolder)) {
+      itemFolder = normalizePath(`${root}/${base}-${suffix}`);
+      suffix += 1;
+    }
+    await this.ensureFolder(itemFolder);
+    const warnings = [...(capture.warnings || [])];
+    const imageRefs: string[] = [];
+    const videoRefs: string[] = [];
+    for (const media of capture.media || []) {
+      if (media.type === "image" && !this.settings.downloadImages) continue;
+      if (media.type === "video" && !this.settings.downloadVideos) continue;
+      if (media.type === "video" && (media.size || 0) > this.settings.maxVideoMb * 1024 * 1024) {
+        warnings.push(`视频 ${media.filename} 超过 ${this.settings.maxVideoMb} MB，已跳过`);
+        continue;
+      }
+      try {
+        const folder = media.type === "image" ? "images" : "videos";
+        await this.ensureFolder(`${itemFolder}/${folder}`);
+        const filename = safeName(media.filename || `${media.id}.${media.type === "image" ? "jpg" : "mp4"}`);
+        const mediaPath = await this.downloadMedia(media, `${itemFolder}/${folder}/${filename}`);
+        const relative = mediaPath.slice(itemFolder.length + 1);
+        (media.type === "image" ? imageRefs : videoRefs).push(`![[${relative}]]`);
+      } catch (error) {
+        warnings.push(`媒体 ${media.filename} 下载失败：${error instanceof Error ? error.message : "未知错误"}`);
+      }
+    }
+
+    const tags = [...this.settings.tags.split(",").map((tag) => tag.trim()).filter(Boolean), ...(capture.tags || [])]
+      .filter((tag, index, all) => all.indexOf(tag) === index);
+    const status = warnings.length ? "needs-review" : "captured";
+    const frontmatter = [
+      "---",
+      `source: ${JSON.stringify(capture.platform)}`,
+      `url: ${JSON.stringify(originalUrl)}`,
+      `canonical_url: ${JSON.stringify(capture.canonicalUrl)}`,
+      `title: ${JSON.stringify(capture.title)}`,
+      `author: ${JSON.stringify(capture.author || "")}`,
+      `saved_at: ${JSON.stringify(new Date().toISOString())}`,
+      `status: ${JSON.stringify(status)}`,
+      ...(tags.length ? [`tags: ${JSON.stringify(tags)}`] : []),
+      ...(warnings.length ? [`capture_error: ${JSON.stringify(warnings.join("；"))}`] : []),
+      "---"
+    ].join("\n");
+    const sections = [
+      `# ${capture.title || `${capture.platform} 收藏 ${day}`}`,
+      capture.author ? `作者：${capture.author}` : "",
+      capture.publishedAt ? `发布时间：${capture.publishedAt}` : "",
+      "## 正文",
+      capture.content || "（未能自动提取正文。）",
+      ...(imageRefs.length ? ["## 图片", ...imageRefs] : []),
+      ...(videoRefs.length ? ["## 视频", ...videoRefs] : []),
+      "## 原始链接",
+      originalUrl,
+      ...(this.settings.includeTimestamp ? [`保存时间：${stamp}`] : [])
+    ].filter(Boolean);
+    const path = normalizePath(`${itemFolder}/${safeName(capture.title || `${capture.platform}-${day}`)}.md`);
+    await this.app.vault.create(path, `${frontmatter}\n\n${sections.join("\n\n")}\n`);
+    await this.openFile(path);
+    new Notice(`已保存完整收藏：${path}`);
+  }
+
+  private async downloadMedia(media: CaptureMedia, requestedPath: string): Promise<string> {
+    const headers: Record<string, string> = {};
+    if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
+    const response = await requestUrl({ url: media.url, headers, throw: false });
+    if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
+    const bytes = response.arrayBuffer.byteLength;
+    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
+    if (bytes > max) throw new Error(`文件超过 ${Math.round(max / 1024 / 1024)} MB 限制`);
+    let path = normalizePath(requestedPath);
+    let suffix = 2;
+    const extension = path.includes(".") ? path.slice(path.lastIndexOf(".")) : "";
+    const stem = extension ? path.slice(0, -extension.length) : path;
+    while (this.app.vault.getAbstractFileByPath(path)) { path = `${stem}-${suffix}${extension}`; suffix += 1; }
+    await this.app.vault.createBinary(path, response.arrayBuffer);
+    return path;
+  }
+
+  private async createLinkNote(url: string, platform: "小红书" | "抖音", error?: string): Promise<void> {
+    const { day, stamp } = dateParts();
+    const root = normalizePath(this.settings.folder.trim() || "收集/社交媒体");
+    await this.ensureFolder(root);
+    const base = safeName(`${platform}-${day}`);
+    let itemFolder = normalizePath(`${root}/${base}`);
+    let suffix = 2;
+    while (this.app.vault.getAbstractFileByPath(itemFolder)) { itemFolder = normalizePath(`${root}/${base}-${suffix}`); suffix += 1; }
+    await this.ensureFolder(itemFolder);
     const tags = this.settings.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
     const frontmatter = [
       "---",
       `source: ${JSON.stringify(platform)}`,
       `url: ${JSON.stringify(url)}`,
       `saved_at: ${JSON.stringify(new Date().toISOString())}`,
+      `status: ${JSON.stringify(error ? "needs-review" : "inbox")}`,
       ...(tags.length ? [`tags: ${JSON.stringify(tags)}`] : []),
-      "status: inbox",
+      ...(error ? [`capture_error: ${JSON.stringify(error)}`] : []),
       "---"
     ].join("\n");
-    const title = `${platform} 收藏 ${day}`;
-    const body = `${frontmatter}\n\n# ${title}\n\n原始链接：${url}\n\n## 内容\n\n（后续可在这里补充摘要、图片或视频说明。）\n\n${this.settings.includeTimestamp ? `保存时间：${stamp}\n` : ""}`;
+    const filename = safeName(`${platform}-${day}`);
+    const path = normalizePath(`${itemFolder}/${filename}.md`);
+    const body = `${frontmatter}\n\n# ${platform} 收藏 ${day}\n\n## 正文\n\n（解析服务未配置或暂时不可用。）\n\n## 原始链接\n\n${url}\n\n${this.settings.includeTimestamp ? `保存时间：${stamp}\n` : ""}`;
     await this.app.vault.create(path, body);
+    await this.openFile(path);
+    if (!error) new Notice(`已保存链接：${path}`);
+  }
+
+  private async openFile(path: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (file instanceof TFile) await this.app.workspace.getLeaf(false).openFile(file);
-    new Notice(`已保存到：${path}`);
   }
 
   private async hasSavedUrl(url: string): Promise<boolean> {
     for (const file of this.app.vault.getMarkdownFiles()) {
       const content = await this.app.vault.cachedRead(file);
-      const match = content.match(/^url:\s*["']?([^"'\r\n]+)["']?\s*$/m);
-      if (match?.[1] === url) return true;
+      const matches = [...content.matchAll(/^(?:url|canonical_url):\s*["']?([^"'\r\n]+)["']?\s*$/gm)];
+      if (matches.some((match) => match[1] === url) && !/^status:\s*["']?needs-review["']?\s*$/m.test(content)) return true;
     }
     return false;
   }
@@ -149,7 +333,10 @@ export default class AndroidSocialSaver extends Plugin {
     }
   }
 
-  async loadSettings(): Promise<void> { this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData()); }
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
   async saveSettings(): Promise<void> { await this.saveData(this.settings); }
 }
 
@@ -161,15 +348,28 @@ class SocialSaverSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    new Setting(containerEl).setName("解析服务地址").setDesc("例如 http://192.168.1.20:3000；留空则只保存链接").addText((text) => text
+      .setPlaceholder("http://192.168.1.20:3000").setValue(this.plugin.settings.parserUrl)
+      .onChange(async (value) => { this.plugin.settings.parserUrl = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("API Token").setDesc("与 NAS 解析服务 .env 中的 API_TOKEN 一致").addText((text) => text
+      .setPlaceholder("Bearer Token").setValue(this.plugin.settings.apiToken).then((component) => { component.inputEl.type = "password"; return component; })
+      .onChange(async (value) => { this.plugin.settings.apiToken = value; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName("保存目录").setDesc("相对于当前库的路径").addText((text) => text
-      .setPlaceholder("收集/社交媒体")
-      .setValue(this.plugin.settings.folder)
+      .setPlaceholder("收集/社交媒体").setValue(this.plugin.settings.folder)
       .onChange(async (value) => { this.plugin.settings.folder = value; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName("默认标签").setDesc("使用英文逗号分隔").addText((text) => text
-      .setValue(this.plugin.settings.tags)
-      .onChange(async (value) => { this.plugin.settings.tags = value; await this.plugin.saveSettings(); }));
-    new Setting(containerEl).setName("写入保存时间").addToggle((toggle) => toggle
-      .setValue(this.plugin.settings.includeTimestamp)
-      .onChange(async (value) => { this.plugin.settings.includeTimestamp = value; await this.plugin.saveSettings(); }));
+      .setValue(this.plugin.settings.tags).onChange(async (value) => { this.plugin.settings.tags = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("下载图片").addToggle((toggle) => toggle
+      .setValue(this.plugin.settings.downloadImages).onChange(async (value) => { this.plugin.settings.downloadImages = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("下载视频").addToggle((toggle) => toggle
+      .setValue(this.plugin.settings.downloadVideos).onChange(async (value) => { this.plugin.settings.downloadVideos = value; await this.plugin.saveSettings(); }));
+    new Setting(containerEl).setName("视频大小上限（MB）").addText((text) => text
+      .setValue(String(this.plugin.settings.maxVideoMb)).onChange(async (value) => {
+        const parsed = Number(value); if (Number.isFinite(parsed) && parsed > 0) { this.plugin.settings.maxVideoMb = parsed; await this.plugin.saveSettings(); }
+      }));
+    new Setting(containerEl).setName("解析超时（秒）").addText((text) => text
+      .setValue(String(this.plugin.settings.captureTimeoutSeconds)).onChange(async (value) => {
+        const parsed = Number(value); if (Number.isFinite(parsed) && parsed >= 10) { this.plugin.settings.captureTimeoutSeconds = parsed; await this.plugin.saveSettings(); }
+      }));
   }
 }

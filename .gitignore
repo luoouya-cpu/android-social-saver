@@ -1,4 +1,6 @@
 node_modules/
+.env
+parser-service/.env
 android-companion/.gradle/
 android-companion/build/
 android-companion/app/build/
