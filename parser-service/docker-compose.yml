@@ -4,7 +4,6 @@ services:
     container_name: social-capture
     init: true
     ipc: host
-    user: pwuser
     restart: unless-stopped
     ports:
       - "3000:3000"
