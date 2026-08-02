@@ -9,5 +9,6 @@ apk-artifact/
 parser-service-nas.zip
 parser-service-nas-flat.zip
 parser-service-nas/
+parser-service-nas-flat/
 .nas-package/
 .nas-package-flat/
