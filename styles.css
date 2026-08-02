@@ -1,0 +1,8 @@
+/* Android Social Saver currently uses Obsidian's native UI components.
+   Keep this file in the plugin package so manual installation and releases
+   follow Obsidian's standard three-file layout. */
+
+.android-social-saver-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}

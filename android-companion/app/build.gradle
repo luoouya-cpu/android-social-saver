@@ -1,0 +1,5 @@
+plugins { id 'com.android.application' }
+
+android { namespace 'local.android.socialsaver'; compileSdk 35
+    defaultConfig { applicationId 'local.android.socialsaver'; minSdk 23; targetSdk 35; versionCode 1; versionName '0.1.0' }
+}

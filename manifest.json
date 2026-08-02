@@ -1,0 +1,9 @@
+{
+  "id": "android-social-saver",
+  "name": "Android Social Saver",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Receive shared Xiaohongshu and Douyin links on Android and save them as Obsidian notes.",
+  "author": "Local",
+  "isDesktopOnly": false
+}

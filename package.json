@@ -1,0 +1,15 @@
+{
+  "name": "android-social-saver",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "esbuild main.ts --bundle --external:obsidian --outfile=main.js --format=cjs --platform=node --watch",
+    "build": "esbuild main.ts --bundle --external:obsidian --outfile=main.js --format=cjs --platform=node"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.0.0"
+  }
+}
