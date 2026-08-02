@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isPublicHttpUrl, normalizedUrl } from "./service.js";
-import { adapterForUrl } from "./platforms.js";
+import { adapterForUrl, snapshotPage } from "./platforms.js";
 
 test("normalizes supported long and short links", () => {
   assert.equal(normalizedUrl("讲真的 http://xhslink.cn/o/abc 前往小红书"), "http://xhslink.cn/o/abc");
@@ -37,4 +37,16 @@ test("extracts platform fields from embedded page data", () => {
   assert.equal(result.author, "小明");
   assert.equal(result.content, "上海周末路线 #旅行 #美食");
   assert.deepEqual(result.tags, ["旅行", "美食"]);
+});
+
+test("runs page snapshot code without build-time helpers", async () => {
+  let expression = "";
+  const snapshot = await snapshotPage({
+    evaluate: async (value: unknown) => {
+      expression = String(value);
+      return { title: "", description: "", author: "", publishedAt: "", bodyText: "", images: [], videos: [], scripts: [], jsonLd: [] };
+    }
+  } as never);
+  assert.equal(expression.includes("__name"), false);
+  assert.equal(snapshot.title, "");
 });

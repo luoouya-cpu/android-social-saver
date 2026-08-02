@@ -173,12 +173,13 @@ export function adapterForUrl(url: string): PlatformAdapter | undefined {
 }
 
 export async function snapshotPage(page: Page): Promise<PageSnapshot> {
-  return page.evaluate(() => {
-    const meta = (selector: string): string => document.querySelector<HTMLMetaElement>(selector)?.content?.trim() || "";
-    const text = (selector: string): string => document.querySelector<HTMLElement>(selector)?.innerText?.trim() || "";
+  // Pass a plain JavaScript string so tsx/esbuild helpers never leak into the page context.
+  return page.evaluate(`(() => {
+    const meta = (selector) => document.querySelector(selector)?.content?.trim() || "";
+    const text = (selector) => document.querySelector(selector)?.innerText?.trim() || "";
     const images = Array.from(document.images).map((image) => image.currentSrc || image.src || image.getAttribute("data-src") || "");
-    const videos = Array.from(document.querySelectorAll<HTMLVideoElement>("video")).map((video) => video.currentSrc || video.src || "");
-    const sources = Array.from(document.querySelectorAll<HTMLSourceElement>("video source")).map((source) => source.src || source.getAttribute("src") || "");
+    const videos = Array.from(document.querySelectorAll("video")).map((video) => video.currentSrc || video.src || "");
+    const sources = Array.from(document.querySelectorAll("video source")).map((source) => source.src || source.getAttribute("src") || "");
     const scripts = Array.from(document.scripts).map((script) => script.textContent || "").filter((value) => value.length > 0).slice(0, 40);
     const jsonLd = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map((script) => script.textContent || "");
     const body = text("article") || text("main") || document.body?.innerText || "";
@@ -193,7 +194,7 @@ export async function snapshotPage(page: Page): Promise<PageSnapshot> {
       scripts,
       jsonLd
     };
-  });
+  })()`);
 }
 
 export function addScriptMediaCandidates(snapshot: PageSnapshot): PageSnapshot {
