@@ -16,7 +16,8 @@ function platformFor(url: string): "小红书" | "抖音" | "其他" {
   try {
     const host = new URL(url).hostname.toLowerCase();
     if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") ||
-        host === "xhslink.com" || host.endsWith(".xhslink.com")) return "小红书";
+        host === "xhslink.com" || host.endsWith(".xhslink.com") ||
+        host === "xhslink.cn" || host.endsWith(".xhslink.cn")) return "小红书";
     if (host === "douyin.com" || host.endsWith(".douyin.com") ||
         host === "iesdouyin.com" || host.endsWith(".iesdouyin.com")) return "抖音";
   } catch {
@@ -82,7 +83,7 @@ export default class AndroidSocialSaver extends Plugin {
 
   private async saveUrlInternal(rawUrl: string): Promise<void> {
     // 小红书复制链接有时会省略协议，例如 xhslink.com/a/xxxx。
-    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
+    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
     let url = match?.[0]?.replace(/[),.;!?，。！？]+$/, "");
     if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     if (!url) {

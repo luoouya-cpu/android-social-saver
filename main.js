@@ -31,7 +31,7 @@ var DEFAULT_SETTINGS = {
 function platformFor(url) {
   try {
     const host = new URL(url).hostname.toLowerCase();
-    if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") || host === "xhslink.com" || host.endsWith(".xhslink.com")) return "\u5C0F\u7EA2\u4E66";
+    if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") || host === "xhslink.com" || host.endsWith(".xhslink.com") || host === "xhslink.cn" || host.endsWith(".xhslink.cn")) return "\u5C0F\u7EA2\u4E66";
     if (host === "douyin.com" || host.endsWith(".douyin.com") || host === "iesdouyin.com" || host.endsWith(".iesdouyin.com")) return "\u6296\u97F3";
   } catch {
   }
@@ -85,7 +85,7 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     return this.saveQueue;
   }
   async saveUrlInternal(rawUrl) {
-    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
+    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
     let url = match?.[0]?.replace(/[),.;!?，。！？]+$/, "");
     if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     if (!url) {
