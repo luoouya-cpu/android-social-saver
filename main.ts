@@ -151,6 +151,10 @@ export default class AndroidSocialSaver extends Plugin {
       new Notice("正在解析正文和媒体，请稍候…");
       try {
         const capture = await this.captureRemote(url);
+        if (capture.canonicalUrl && await this.hasSavedUrl(capture.canonicalUrl)) {
+          new Notice("这个链接已经保存过了");
+          return;
+        }
         await this.createCapturedNote(url, capture);
         return;
       } catch (error) {
@@ -212,6 +216,7 @@ export default class AndroidSocialSaver extends Plugin {
     const warnings = [...(capture.warnings || [])];
     const imageRefs: string[] = [];
     const videoRefs: string[] = [];
+    const createdMediaPaths: string[] = [];
     for (const media of capture.media || []) {
       if (media.type === "image" && !this.settings.downloadImages) continue;
       if (media.type === "video" && !this.settings.downloadVideos) continue;
@@ -224,6 +229,7 @@ export default class AndroidSocialSaver extends Plugin {
         await this.ensureFolder(`${itemFolder}/${folder}`);
         const filename = safeName(media.filename || `${media.id}.${media.type === "image" ? "jpg" : "mp4"}`);
         const mediaPath = await this.downloadMedia(media, `${itemFolder}/${folder}/${filename}`);
+        createdMediaPaths.push(mediaPath);
         const relative = mediaPath.slice(itemFolder.length + 1);
         (media.type === "image" ? imageRefs : videoRefs).push(`![[${relative}]]`);
       } catch (error) {
@@ -260,7 +266,17 @@ export default class AndroidSocialSaver extends Plugin {
       ...(this.settings.includeTimestamp ? [`保存时间：${stamp}`] : [])
     ].filter(Boolean);
     const path = normalizePath(`${itemFolder}/${safeName(capture.title || `${capture.platform}-${day}`)}.md`);
-    await this.app.vault.create(path, `${frontmatter}\n\n${sections.join("\n\n")}\n`);
+    try {
+      await this.app.vault.create(path, `${frontmatter}\n\n${sections.join("\n\n")}\n`);
+    } catch (error) {
+      for (const mediaPath of createdMediaPaths) {
+        const mediaFile = this.app.vault.getAbstractFileByPath(mediaPath);
+        if (mediaFile) {
+          try { await this.app.vault.delete(mediaFile); } catch (cleanupError) { console.warn("Failed to clean up media after note creation failure", cleanupError); }
+        }
+      }
+      throw error;
+    }
     await this.openFile(path);
     new Notice(`已保存完整收藏：${path}`);
   }
@@ -268,10 +284,13 @@ export default class AndroidSocialSaver extends Plugin {
   private async downloadMedia(media: CaptureMedia, requestedPath: string): Promise<string> {
     const headers: Record<string, string> = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
+    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
+    const head = await requestUrl({ url: media.url, method: "HEAD", headers, throw: false });
+    const advertisedSize = Number(head.headers["content-length"] || head.headers["Content-Length"] || 0);
+    if (head.status < 400 && advertisedSize > max) throw new Error(`鏂囦欢瓒呰繃 ${Math.round(max / 1024 / 1024)} MB 闄愬埗`);
     const response = await requestUrl({ url: media.url, headers, throw: false });
     if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
     const bytes = response.arrayBuffer.byteLength;
-    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
     if (bytes > max) throw new Error(`文件超过 ${Math.round(max / 1024 / 1024)} MB 限制`);
     let path = normalizePath(requestedPath);
     let suffix = 2;

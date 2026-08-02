@@ -4,9 +4,14 @@ services:
     container_name: social-capture
     init: true
     ipc: host
+    user: pwuser
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      MAX_CONCURRENT_CAPTURES: ${MAX_CONCURRENT_CAPTURES:-1}
+      MAX_QUEUED_CAPTURES: ${MAX_QUEUED_CAPTURES:-8}
+      MAX_VIDEO_MB: ${MAX_VIDEO_MB:-200}
+      MAX_IMAGE_MB: ${MAX_IMAGE_MB:-30}

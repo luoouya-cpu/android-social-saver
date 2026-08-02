@@ -121,6 +121,10 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
       new import_obsidian.Notice("\u6B63\u5728\u89E3\u6790\u6B63\u6587\u548C\u5A92\u4F53\uFF0C\u8BF7\u7A0D\u5019\u2026");
       try {
         const capture = await this.captureRemote(url);
+        if (capture.canonicalUrl && await this.hasSavedUrl(capture.canonicalUrl)) {
+          new import_obsidian.Notice("\u8FD9\u4E2A\u94FE\u63A5\u5DF2\u7ECF\u4FDD\u5B58\u8FC7\u4E86");
+          return;
+        }
         await this.createCapturedNote(url, capture);
         return;
       } catch (error) {
@@ -178,6 +182,7 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     const warnings = [...capture.warnings || []];
     const imageRefs = [];
     const videoRefs = [];
+    const createdMediaPaths = [];
     for (const media of capture.media || []) {
       if (media.type === "image" && !this.settings.downloadImages) continue;
       if (media.type === "video" && !this.settings.downloadVideos) continue;
@@ -190,6 +195,7 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
         await this.ensureFolder(`${itemFolder}/${folder}`);
         const filename = safeName(media.filename || `${media.id}.${media.type === "image" ? "jpg" : "mp4"}`);
         const mediaPath = await this.downloadMedia(media, `${itemFolder}/${folder}/${filename}`);
+        createdMediaPaths.push(mediaPath);
         const relative = mediaPath.slice(itemFolder.length + 1);
         (media.type === "image" ? imageRefs : videoRefs).push(`![[${relative}]]`);
       } catch (error) {
@@ -224,20 +230,37 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
       ...this.settings.includeTimestamp ? [`\u4FDD\u5B58\u65F6\u95F4\uFF1A${stamp}`] : []
     ].filter(Boolean);
     const path = (0, import_obsidian.normalizePath)(`${itemFolder}/${safeName(capture.title || `${capture.platform}-${day}`)}.md`);
-    await this.app.vault.create(path, `${frontmatter}
+    try {
+      await this.app.vault.create(path, `${frontmatter}
 
 ${sections.join("\n\n")}
 `);
+    } catch (error) {
+      for (const mediaPath of createdMediaPaths) {
+        const mediaFile = this.app.vault.getAbstractFileByPath(mediaPath);
+        if (mediaFile) {
+          try {
+            await this.app.vault.delete(mediaFile);
+          } catch (cleanupError) {
+            console.warn("Failed to clean up media after note creation failure", cleanupError);
+          }
+        }
+      }
+      throw error;
+    }
     await this.openFile(path);
     new import_obsidian.Notice(`\u5DF2\u4FDD\u5B58\u5B8C\u6574\u6536\u85CF\uFF1A${path}`);
   }
   async downloadMedia(media, requestedPath) {
     const headers = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
+    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
+    const head = await (0, import_obsidian.requestUrl)({ url: media.url, method: "HEAD", headers, throw: false });
+    const advertisedSize = Number(head.headers["content-length"] || head.headers["Content-Length"] || 0);
+    if (head.status < 400 && advertisedSize > max) throw new Error(`\u93C2\u56E6\u6B22\u74D2\u5470\u7E43 ${Math.round(max / 1024 / 1024)} MB \u95C4\u612C\u57D7`);
     const response = await (0, import_obsidian.requestUrl)({ url: media.url, headers, throw: false });
     if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
     const bytes = response.arrayBuffer.byteLength;
-    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
     if (bytes > max) throw new Error(`\u6587\u4EF6\u8D85\u8FC7 ${Math.round(max / 1024 / 1024)} MB \u9650\u5236`);
     let path = (0, import_obsidian.normalizePath)(requestedPath);
     let suffix = 2;

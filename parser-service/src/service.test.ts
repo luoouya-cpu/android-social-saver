@@ -18,3 +18,23 @@ test("selects platform adapters", () => {
   assert.equal(adapterForUrl("https://www.xiaohongshu.com/explore/abc")?.platform, "小红书");
   assert.equal(adapterForUrl("https://v.douyin.com/abc")?.platform, "抖音");
 });
+
+test("extracts platform fields from embedded page data", () => {
+  const adapter = adapterForUrl("https://www.xiaohongshu.com/explore/abc");
+  assert.ok(adapter);
+  const result = adapter.extract({
+    title: "fallback",
+    description: "fallback description",
+    author: "fallback author",
+    publishedAt: "",
+    bodyText: "fallback body",
+    images: [],
+    videos: [],
+    scripts: ['{"title":"旅行攻略","nickname":"小明","desc":"上海周末路线 #旅行 #美食"}'],
+    jsonLd: []
+  }, "https://www.xiaohongshu.com/explore/abc");
+  assert.equal(result.title, "旅行攻略");
+  assert.equal(result.author, "小明");
+  assert.equal(result.content, "上海周末路线 #旅行 #美食");
+  assert.deepEqual(result.tags, ["旅行", "美食"]);
+});

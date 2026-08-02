@@ -116,16 +116,49 @@ function genericExtract(snapshot: PageSnapshot, pageUrl: string, platform: Platf
   };
 }
 
+function scriptField(scripts: string[], keys: string[]): string {
+  const pattern = new RegExp(`(?:["'])(?:${keys.join("|")})(?:["'])\\s*:\\s*(?:["'])(.*?)(?:["'])`, "i");
+  for (const script of scripts) {
+    const match = script.match(pattern);
+    if (match?.[1]) return clean(match[1].replace(/\\["']/g, "\"").replace(/\\n/g, "\\n"));
+  }
+  return "";
+}
+
+function hashtags(content: string): string[] {
+  return dedupe([...content.matchAll(/#([^#\s，。！？!?]{1,30})/g)].map((match) => match[1].trim()));
+}
+
 const xhsAdapter: PlatformAdapter = {
   platform: "小红书",
   matches: (host) => host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") || host === "xhslink.com" || host.endsWith(".xhslink.com") || host === "xhslink.cn" || host.endsWith(".xhslink.cn"),
-  extract: (snapshot, pageUrl) => genericExtract(snapshot, pageUrl, "小红书")
+  extract: (snapshot, pageUrl) => {
+    const result = genericExtract(snapshot, pageUrl, "小红书");
+    const content = scriptField(snapshot.scripts, ["desc", "noteDesc", "description", "content"]) || result.content;
+    return {
+      ...result,
+      title: scriptField(snapshot.scripts, ["title", "noteTitle", "displayTitle"]) || result.title,
+      author: scriptField(snapshot.scripts, ["nickname", "userName", "author"]) || result.author,
+      content,
+      tags: hashtags(content)
+    };
+  }
 };
 
 const douyinAdapter: PlatformAdapter = {
   platform: "抖音",
   matches: (host) => host === "douyin.com" || host.endsWith(".douyin.com") || host === "iesdouyin.com" || host.endsWith(".iesdouyin.com"),
-  extract: (snapshot, pageUrl) => genericExtract(snapshot, pageUrl, "抖音")
+  extract: (snapshot, pageUrl) => {
+    const result = genericExtract(snapshot, pageUrl, "抖音");
+    const content = scriptField(snapshot.scripts, ["desc", "description", "content", "title"]) || result.content;
+    return {
+      ...result,
+      title: scriptField(snapshot.scripts, ["desc", "title"]) || result.title,
+      author: scriptField(snapshot.scripts, ["nickname", "author", "unique_id"]) || result.author,
+      content,
+      tags: hashtags(content)
+    };
+  }
 };
 
 export const adapters: PlatformAdapter[] = [xhsAdapter, douyinAdapter];
