@@ -7,4 +7,5 @@ android-companion/app/build/
 AndroidSocialSaver-debug.apk
 apk-artifact/
 parser-service-nas.zip
+parser-service-nas/
 .nas-package/
