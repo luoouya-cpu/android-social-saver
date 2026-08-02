@@ -10,10 +10,9 @@ services:
       - "3000:3000"
     environment:
       PORT: 3000
-      # 请务必将下面的默认值改成你自己的长随机字符串。
-      # 如果 NAS 支持 .env，也可以继续使用 API_TOKEN=... 覆盖它。
-      API_TOKEN: ${API_TOKEN:-change-this-to-a-long-random-token}
-      MAX_CONCURRENT_CAPTURES: ${MAX_CONCURRENT_CAPTURES:-1}
-      MAX_QUEUED_CAPTURES: ${MAX_QUEUED_CAPTURES:-8}
-      MAX_VIDEO_MB: ${MAX_VIDEO_MB:-200}
-      MAX_IMAGE_MB: ${MAX_IMAGE_MB:-30}
+      # 请务必将下面的 Token 改成你自己的长随机字符串。
+      API_TOKEN: "change-this-to-a-long-random-token"
+      MAX_CONCURRENT_CAPTURES: "1"
+      MAX_QUEUED_CAPTURES: "8"
+      MAX_VIDEO_MB: "200"
+      MAX_IMAGE_MB: "30"
