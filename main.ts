@@ -81,8 +81,10 @@ export default class AndroidSocialSaver extends Plugin {
   }
 
   private async saveUrlInternal(rawUrl: string): Promise<void> {
-    const match = rawUrl.match(/https?:\/\/[^\s]+/i);
-    const url = match?.[0]?.replace(/[),.;!?]+$/, "");
+    // 小红书复制链接有时会省略协议，例如 xhslink.com/a/xxxx。
+    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
+    let url = match?.[0]?.replace(/[),.;!?，。！？]+$/, "");
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     if (!url) {
       new Notice("未找到有效链接");
       return;

@@ -85,8 +85,9 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     return this.saveQueue;
   }
   async saveUrlInternal(rawUrl) {
-    const match = rawUrl.match(/https?:\/\/[^\s]+/i);
-    const url = match?.[0]?.replace(/[),.;!?]+$/, "");
+    const match = rawUrl.match(/(?:https?:\/\/)?(?:www\.)?(?:xiaohongshu\.com|xhslink\.com|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
+    let url = match?.[0]?.replace(/[),.;!?，。！？]+$/, "");
+    if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
     if (!url) {
       new import_obsidian.Notice("\u672A\u627E\u5230\u6709\u6548\u94FE\u63A5");
       return;
