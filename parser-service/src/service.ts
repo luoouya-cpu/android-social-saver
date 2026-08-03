@@ -64,9 +64,14 @@ export class CaptureService {
       }
       const snapshot = addScriptMediaCandidates(await snapshotPage(page));
       const extracted = adapter.extract(snapshot, finalUrl);
+      const cookies = await context.cookies();
+      const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+      const origin = new URL(finalUrl).origin;
+      const mediaHeaders: Record<string, string> = { Origin: origin };
+      if (cookieHeader) mediaHeaders.Cookie = cookieHeader;
       if (!extracted.title && !extracted.content) warnings.push("页面未提取到正文，可能需要登录或触发了平台保护");
       if (!extracted.media.length) warnings.push("页面未提取到图片或视频");
-      const media = uniqueMedia(extracted.media);
+      const media = uniqueMedia(extracted.media).map((item) => ({ ...item, requestHeaders: mediaHeaders }));
       return {
         status: "completed",
         platform: adapter.platform as Platform,

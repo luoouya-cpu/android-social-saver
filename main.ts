@@ -92,6 +92,15 @@ function apiBase(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
 
+function displayPublishedAt(value: string): string {
+  if (/^\d{10,13}$/.test(value)) {
+    const milliseconds = Number(value.length === 10 ? `${value}000` : value);
+    const date = new Date(milliseconds);
+    if (!Number.isNaN(date.getTime())) return dateParts(date).stamp;
+  }
+  return value;
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, action: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(`${action}超时`)), timeoutMs);
@@ -276,7 +285,7 @@ export default class AndroidSocialSaver extends Plugin {
     const sections = [
       `# ${capture.title || `${capture.platform} 收藏 ${day}`}`,
       capture.author ? `作者：${capture.author}` : "",
-      capture.publishedAt ? `发布时间：${capture.publishedAt}` : "",
+      capture.publishedAt ? `发布时间：${displayPublishedAt(capture.publishedAt)}` : "",
       "## 正文",
       capture.content || "（未能自动提取正文。）",
       ...(imageRefs.length ? ["## 图片", ...imageRefs] : []),

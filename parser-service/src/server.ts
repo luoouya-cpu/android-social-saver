@@ -20,7 +20,7 @@ const maxVideoBytes = Math.min(50, Math.max(1, Number(process.env.MAX_VIDEO_MB |
 const maxImageBytes = Math.max(1, Number(process.env.MAX_IMAGE_MB || 30)) * 1024 * 1024;
 const mediaDirectory = process.env.MEDIA_DIR || "/tmp/social-capture-media";
 const upstreamTimeoutMs = Math.max(1_000, Number(process.env.UPSTREAM_TIMEOUT_MS || 30_000));
-const serviceVersion = "2026-08-03-media-v2";
+const serviceVersion = "2026-08-03-media-v3";
 const pendingJobs: CaptureJob[] = [];
 let activeJobs = 0;
 
@@ -63,7 +63,7 @@ function publicResult(job: CaptureJob, baseUrl: string): Record<string, unknown>
   return {
     ...result,
     jobId: job.id,
-    media: result.media.map(({ sourceUrl: _sourceUrl, cachedPath: _cachedPath, ...item }: MediaItem) => ({
+    media: result.media.map(({ sourceUrl: _sourceUrl, cachedPath: _cachedPath, requestHeaders: _requestHeaders, ...item }: MediaItem) => ({
       ...item,
       url: `${baseUrl}/v1/captures/${job.id}/media/${encodeURIComponent(item.id)}`
     }))
@@ -91,7 +91,7 @@ function allowedMediaHost(host: string): boolean {
     value === "ibytedtos.com" || value.endsWith(".ibytedtos.com");
 }
 
-async function safeMediaFetch(input: string, referer?: string): Promise<Response> {
+async function safeMediaFetch(input: string, referer?: string, requestHeaders?: Record<string, string>): Promise<Response> {
   let current = input;
   for (let redirects = 0; redirects <= 5; redirects += 1) {
     const parsed = new URL(current);
@@ -104,6 +104,7 @@ async function safeMediaFetch(input: string, referer?: string): Promise<Response
       headers: {
         "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36",
         "Accept": "*/*",
+        ...requestHeaders,
         ...(referer ? { Referer: referer } : {})
       },
       signal: AbortSignal.timeout(upstreamTimeoutMs)
@@ -132,7 +133,7 @@ async function cacheMedia(job: CaptureJob): Promise<void> {
     const maxBytes = item.type === "video" ? maxVideoBytes : maxImageBytes;
     const destination = join(jobDirectory, item.id);
     try {
-      const upstream = await safeMediaFetch(item.sourceUrl, job.result.canonicalUrl);
+      const upstream = await safeMediaFetch(item.sourceUrl, job.result.canonicalUrl, item.requestHeaders);
       if (!upstream.ok || !upstream.body) throw new Error(`媒体返回 HTTP ${upstream.status}`);
       const mimeType = upstream.headers.get("content-type") || "";
       if (!allowedMime(item.type, mimeType)) throw new Error(`不支持的媒体类型：${mimeType || "未知"}`);
@@ -152,7 +153,7 @@ async function cacheMedia(job: CaptureJob): Promise<void> {
       } finally {
         await file.close();
       }
-      cached.push({ ...item, size, mimeType: mimeType.split(";", 1)[0], cachedPath: destination });
+      cached.push({ ...item, size, mimeType: mimeType.split(";", 1)[0], cachedPath: destination, requestHeaders: undefined });
     } catch (error) {
       await rm(destination, { force: true });
       job.result.warnings.push(`媒体 ${item.filename} 缓存失败：${error instanceof Error ? error.message : "未知错误"}`);

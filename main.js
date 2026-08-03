@@ -66,6 +66,14 @@ function sleep(ms) {
 function apiBase(value) {
   return value.trim().replace(/\/+$/, "");
 }
+function displayPublishedAt(value) {
+  if (/^\d{10,13}$/.test(value)) {
+    const milliseconds = Number(value.length === 10 ? `${value}000` : value);
+    const date = new Date(milliseconds);
+    if (!Number.isNaN(date.getTime())) return dateParts(date).stamp;
+  }
+  return value;
+}
 function withTimeout(promise, timeoutMs, action) {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error(`${action}\u8D85\u65F6`)), timeoutMs);
@@ -238,7 +246,7 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     const sections = [
       `# ${capture.title || `${capture.platform} \u6536\u85CF ${day}`}`,
       capture.author ? `\u4F5C\u8005\uFF1A${capture.author}` : "",
-      capture.publishedAt ? `\u53D1\u5E03\u65F6\u95F4\uFF1A${capture.publishedAt}` : "",
+      capture.publishedAt ? `\u53D1\u5E03\u65F6\u95F4\uFF1A${displayPublishedAt(capture.publishedAt)}` : "",
       "## \u6B63\u6587",
       capture.content || "\uFF08\u672A\u80FD\u81EA\u52A8\u63D0\u53D6\u6B63\u6587\u3002\uFF09",
       ...imageRefs.length ? ["## \u56FE\u7247", ...imageRefs] : [],

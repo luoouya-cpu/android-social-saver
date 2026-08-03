@@ -9,6 +9,7 @@ export interface MediaItem {
   size?: number;
   mimeType?: string;
   cachedPath?: string;
+  requestHeaders?: Record<string, string>;
 }
 
 export interface CaptureResult {
