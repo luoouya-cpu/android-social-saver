@@ -20,6 +20,7 @@ const maxVideoBytes = Math.min(50, Math.max(1, Number(process.env.MAX_VIDEO_MB |
 const maxImageBytes = Math.max(1, Number(process.env.MAX_IMAGE_MB || 30)) * 1024 * 1024;
 const mediaDirectory = process.env.MEDIA_DIR || "/tmp/social-capture-media";
 const upstreamTimeoutMs = Math.max(1_000, Number(process.env.UPSTREAM_TIMEOUT_MS || 30_000));
+const serviceVersion = "2026-08-03-media-v2";
 const pendingJobs: CaptureJob[] = [];
 let activeJobs = 0;
 
@@ -90,7 +91,7 @@ function allowedMediaHost(host: string): boolean {
     value === "ibytedtos.com" || value.endsWith(".ibytedtos.com");
 }
 
-async function safeMediaFetch(input: string): Promise<Response> {
+async function safeMediaFetch(input: string, referer?: string): Promise<Response> {
   let current = input;
   for (let redirects = 0; redirects <= 5; redirects += 1) {
     const parsed = new URL(current);
@@ -100,7 +101,11 @@ async function safeMediaFetch(input: string): Promise<Response> {
     if (addresses.some(({ address }) => isPrivateIp(address))) throw new Error("媒体地址解析到了私有网络");
     const upstream = await fetch(current, {
       redirect: "manual",
-      headers: { "User-Agent": "Mozilla/5.0" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/124 Mobile Safari/537.36",
+        "Accept": "*/*",
+        ...(referer ? { Referer: referer } : {})
+      },
       signal: AbortSignal.timeout(upstreamTimeoutMs)
     });
     if (upstream.status < 300 || upstream.status >= 400) return upstream;
@@ -127,7 +132,7 @@ async function cacheMedia(job: CaptureJob): Promise<void> {
     const maxBytes = item.type === "video" ? maxVideoBytes : maxImageBytes;
     const destination = join(jobDirectory, item.id);
     try {
-      const upstream = await safeMediaFetch(item.sourceUrl);
+      const upstream = await safeMediaFetch(item.sourceUrl, job.result.canonicalUrl);
       if (!upstream.ok || !upstream.body) throw new Error(`媒体返回 HTTP ${upstream.status}`);
       const mimeType = upstream.headers.get("content-type") || "";
       if (!allowedMime(item.type, mimeType)) throw new Error(`不支持的媒体类型：${mimeType || "未知"}`);
@@ -199,7 +204,7 @@ function drainJobs(): void {
 const server = createServer(async (request, response) => {
   if (request.method === "OPTIONS") { response.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Authorization, Content-Type" }); response.end(); return; }
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
-  if (request.method === "GET" && url.pathname === "/health") { json(response, 200, { status: "ok" }); return; }
+  if (request.method === "GET" && url.pathname === "/health") { json(response, 200, { status: "ok", version: serviceVersion }); return; }
   if (!authorized(request)) { json(response, 401, { error: "未授权" }); return; }
 
   try {

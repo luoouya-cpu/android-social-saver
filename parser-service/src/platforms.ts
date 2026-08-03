@@ -221,8 +221,19 @@ export function addScriptMediaCandidates(snapshot: PageSnapshot): PageSnapshot {
     for (const raw of normalizedScript.match(pattern) || []) {
       const url = raw;
       if (/\.(?:jpg|jpeg|png|webp|avif)(?:\?|$)/i.test(url) || /(?:xhscdn|douyinpic|image)/i.test(url)) imageCandidates.push(url);
-      if (/\.(?:mp4|m3u8)(?:\?|$)/i.test(url) || /(?:douyinvod|video|playwm)/i.test(url)) videoCandidates.push(url);
+      if (isVideoUrl(url)) videoCandidates.push(url);
     }
   }
   return { ...snapshot, images: [...snapshot.images, ...imageCandidates], videos: [...snapshot.videos, ...videoCandidates] };
+}
+
+function isVideoUrl(value: string): boolean {
+  if (/\.(?:mp4|webm|m3u8)(?:\?|$)/i.test(value)) return true;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return (host.endsWith(".douyinvod.com") || host.endsWith(".ibytedtos.com") || host.endsWith(".xhscdn.com")) &&
+      /(?:video|play|stream|h264|h265)/i.test(value);
+  } catch {
+    return false;
+  }
 }

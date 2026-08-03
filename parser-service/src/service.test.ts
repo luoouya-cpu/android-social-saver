@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isPublicHttpUrl, normalizedUrl } from "./service.js";
-import { adapterForUrl, snapshotPage } from "./platforms.js";
+import { addScriptMediaCandidates, adapterForUrl, snapshotPage } from "./platforms.js";
 
 test("normalizes supported long and short links", () => {
   assert.equal(normalizedUrl("讲真的 http://xhslink.cn/o/abc 前往小红书"), "http://xhslink.cn/o/abc");
@@ -57,6 +57,25 @@ test("does not attach page images to a video note", () => {
   assert.equal(result.media.some((media) => media.type === "image"), false);
   assert.equal(result.media.some((media) => media.type === "video"), true);
   assert.equal(result.publishedAt, "2026-08-02T12:01:28.000Z");
+});
+
+test("does not treat a note page as a video file", () => {
+  const snapshot = addScriptMediaCandidates({
+    title: "",
+    description: "",
+    author: "",
+    publishedAt: "",
+    bodyText: "",
+    images: [],
+    videos: [],
+    scripts: [
+      'https://www.xiaohongshu.com/discovery/item/abc?type=video',
+      'https://sns-video-hw.xhscdn.com/stream/video?id=abc'
+    ],
+    jsonLd: []
+  });
+  assert.equal(snapshot.videos.some((url) => url.includes("xiaohongshu.com/discovery")), false);
+  assert.equal(snapshot.videos.some((url) => url.includes("sns-video-hw.xhscdn.com")), true);
 });
 
 test("runs page snapshot code without build-time helpers", async () => {
