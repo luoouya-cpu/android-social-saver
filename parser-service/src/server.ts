@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { mkdir, open, rm, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { join } from "node:path";
 import { CaptureService } from "./service.js";
 import type { CaptureJob, CaptureResult, MediaItem } from "./types.js";
 
@@ -13,10 +16,16 @@ const maxBodyBytes = 64 * 1024;
 const maxJobAge = 30 * 60 * 1000;
 const maxConcurrentJobs = Math.max(1, Number(process.env.MAX_CONCURRENT_CAPTURES || 1));
 const maxQueuedJobs = Math.max(1, Number(process.env.MAX_QUEUED_CAPTURES || 8));
-const maxVideoBytes = Math.max(1, Number(process.env.MAX_VIDEO_MB || 200)) * 1024 * 1024;
+const maxVideoBytes = Math.min(50, Math.max(1, Number(process.env.MAX_VIDEO_MB || 50))) * 1024 * 1024;
 const maxImageBytes = Math.max(1, Number(process.env.MAX_IMAGE_MB || 30)) * 1024 * 1024;
+const mediaDirectory = process.env.MEDIA_DIR || "/tmp/social-capture-media";
+const upstreamTimeoutMs = Math.max(1_000, Number(process.env.UPSTREAM_TIMEOUT_MS || 30_000));
 const pendingJobs: CaptureJob[] = [];
 let activeJobs = 0;
+
+if (token.length < 32 || token === "REPLACE_WITH_A_LONG_RANDOM_TOKEN_BEFORE_DEPLOYING") {
+  throw new Error("API_TOKEN 必须是至少 32 位的随机字符串；请先在 docker-compose.yml 中设置它。");
+}
 
 function json(response: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
@@ -53,7 +62,7 @@ function publicResult(job: CaptureJob, baseUrl: string): Record<string, unknown>
   return {
     ...result,
     jobId: job.id,
-    media: result.media.map(({ sourceUrl: _sourceUrl, ...item }: MediaItem) => ({
+    media: result.media.map(({ sourceUrl: _sourceUrl, cachedPath: _cachedPath, ...item }: MediaItem) => ({
       ...item,
       url: `${baseUrl}/v1/captures/${job.id}/media/${encodeURIComponent(item.id)}`
     }))
@@ -89,7 +98,11 @@ async function safeMediaFetch(input: string): Promise<Response> {
     if (!allowedMediaHost(parsed.hostname)) throw new Error("媒体域名不在允许列表");
     const addresses = await lookup(parsed.hostname, { all: true });
     if (addresses.some(({ address }) => isPrivateIp(address))) throw new Error("媒体地址解析到了私有网络");
-    const upstream = await fetch(current, { redirect: "manual", headers: { "User-Agent": "Mozilla/5.0" } });
+    const upstream = await fetch(current, {
+      redirect: "manual",
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(upstreamTimeoutMs)
+    });
     if (upstream.status < 300 || upstream.status >= 400) return upstream;
     const location = upstream.headers.get("location");
     if (!location) throw new Error("媒体重定向缺少目标地址");
@@ -98,46 +111,88 @@ async function safeMediaFetch(input: string): Promise<Response> {
   throw new Error("媒体重定向次数过多");
 }
 
+function allowedMime(type: MediaItem["type"], value: string): boolean {
+  const mime = value.toLowerCase().split(";", 1)[0].trim();
+  return type === "image"
+    ? ["image/jpeg", "image/png", "image/webp", "image/avif", "image/gif"].includes(mime)
+    : ["video/mp4", "video/webm"].includes(mime);
+}
+
+async function cacheMedia(job: CaptureJob): Promise<void> {
+  if (!job.result) return;
+  const jobDirectory = join(mediaDirectory, job.id);
+  await mkdir(jobDirectory, { recursive: true });
+  const cached: MediaItem[] = [];
+  for (const item of job.result.media) {
+    const maxBytes = item.type === "video" ? maxVideoBytes : maxImageBytes;
+    const destination = join(jobDirectory, item.id);
+    try {
+      const upstream = await safeMediaFetch(item.sourceUrl);
+      if (!upstream.ok || !upstream.body) throw new Error(`媒体返回 HTTP ${upstream.status}`);
+      const mimeType = upstream.headers.get("content-type") || "";
+      if (!allowedMime(item.type, mimeType)) throw new Error(`不支持的媒体类型：${mimeType || "未知"}`);
+      const advertisedSize = Number(upstream.headers.get("content-length") || 0);
+      if (advertisedSize > maxBytes) throw new Error("媒体超过大小限制");
+      const file = await open(destination, "wx", 0o600);
+      let size = 0;
+      try {
+        const reader = upstream.body.getReader();
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > maxBytes) throw new Error("媒体超过大小限制");
+          await file.writeFile(next.value);
+        }
+      } finally {
+        await file.close();
+      }
+      cached.push({ ...item, size, mimeType: mimeType.split(";", 1)[0], cachedPath: destination });
+    } catch (error) {
+      await rm(destination, { force: true });
+      job.result.warnings.push(`媒体 ${item.filename} 缓存失败：${error instanceof Error ? error.message : "未知错误"}`);
+    }
+  }
+  job.result.media = cached;
+}
+
 async function proxyMedia(response: ServerResponse, job: CaptureJob, mediaId: string, headOnly = false): Promise<void> {
   const item = job.result?.media.find((media) => media.id === mediaId);
-  if (!item) { json(response, 404, { error: "媒体不存在" }); return; }
-  const upstream = await safeMediaFetch(item.sourceUrl);
-  if (!upstream.ok || !upstream.body) { json(response, 502, { error: `媒体返回 HTTP ${upstream.status}` }); return; }
-  const contentLength = Number(upstream.headers.get("content-length") || 0);
+  if (!item?.cachedPath) { json(response, 404, { error: "媒体不存在或已过期" }); return; }
+  const info = await stat(item.cachedPath);
   const maxBytes = item.type === "video" ? maxVideoBytes : maxImageBytes;
-  if (contentLength > maxBytes) { json(response, 413, { error: "媒体超过大小限制" }); return; }
+  if (info.size > maxBytes) { json(response, 413, { error: "媒体超过大小限制" }); return; }
   response.writeHead(200, {
-    "Content-Type": upstream.headers.get("content-type") || (item.type === "video" ? "video/mp4" : "image/jpeg"),
-    ...(contentLength ? { "Content-Length": String(contentLength) } : {}),
-    "Content-Disposition": `attachment; filename="${item.filename}"`,
+    "Content-Type": item.mimeType || (item.type === "video" ? "video/mp4" : "image/jpeg"),
+    "Content-Length": String(info.size),
+    "Content-Disposition": `attachment; filename="${item.filename.replace(/["\\]/g, "_")}"`,
     "Access-Control-Allow-Origin": "*"
   });
   if (headOnly) { response.end(); return; }
-  const reader = upstream.body.getReader();
-  let total = 0;
+  createReadStream(item.cachedPath).on("error", (error) => response.destroy(error)).pipe(response);
+}
+
+async function executeJob(job: CaptureJob): Promise<void> {
+  job.status = "running";
   try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      total += next.value.byteLength;
-      if (total > maxBytes) { response.destroy(new Error("媒体超过大小限制")); return; }
-      response.write(Buffer.from(next.value));
-    }
-    response.end();
+    job.result = await captureService.capture(job.url);
+    await cacheMedia(job);
+    job.status = "completed";
   } catch (error) {
-    response.destroy(error instanceof Error ? error : undefined);
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "解析失败";
+  } finally {
+    activeJobs -= 1;
+    drainJobs();
   }
 }
 
-async function drainJobs(): Promise<void> {
+function drainJobs(): void {
   while (activeJobs < maxConcurrentJobs && pendingJobs.length > 0) {
     const job = pendingJobs.shift();
     if (!job) return;
     activeJobs += 1;
-    job.status = "running";
-    try { job.result = await captureService.capture(job.url); job.status = "completed"; }
-    catch (error) { job.status = "failed"; job.error = error instanceof Error ? error.message : "解析失败"; }
-    finally { activeJobs -= 1; }
+    void executeJob(job);
   }
 }
 
@@ -156,7 +211,7 @@ const server = createServer(async (request, response) => {
       const job: CaptureJob = { id, url: payload.url.trim(), status: "queued", createdAt: Date.now() };
       jobs.set(id, job);
       pendingJobs.push(job);
-      void drainJobs();
+      drainJobs();
       json(response, 202, { jobId: id, status: job.status });
       return;
     }
@@ -176,9 +231,19 @@ const server = createServer(async (request, response) => {
 
 const cleanup = setInterval(() => {
   const cutoff = Date.now() - maxJobAge;
-  for (const [id, job] of jobs) if (job.createdAt < cutoff) jobs.delete(id);
+  for (const [id, job] of jobs) {
+    if (job.createdAt < cutoff) {
+      jobs.delete(id);
+      void rm(join(mediaDirectory, id), { recursive: true, force: true });
+    }
+  }
 }, 5 * 60 * 1000);
 
-server.listen(port, "0.0.0.0", () => console.log(`social capture service listening on :${port}`));
+void mkdir(mediaDirectory, { recursive: true })
+  .then(() => server.listen(port, "0.0.0.0", () => console.log(`social capture service listening on :${port}`)))
+  .catch((error) => {
+    console.error("Unable to create media cache directory", error);
+    process.exit(1);
+  });
 process.on("SIGTERM", async () => { clearInterval(cleanup); await captureService.close(); server.close(() => process.exit(0)); });
 process.on("SIGINT", async () => { clearInterval(cleanup); await captureService.close(); server.close(() => process.exit(0)); });

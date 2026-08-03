@@ -45,9 +45,12 @@ const DEFAULT_SETTINGS: SocialSaverSettings = {
   apiToken: "",
   downloadImages: true,
   downloadVideos: true,
-  maxVideoMb: 200,
+  maxVideoMb: 50,
   captureTimeoutSeconds: 120
 };
+
+const MOBILE_MAX_VIDEO_MB = 50;
+const API_REQUEST_TIMEOUT_MS = 30_000;
 
 function platformFor(url: string): Platform {
   try {
@@ -87,6 +90,13 @@ function sleep(ms: number): Promise<void> {
 
 function apiBase(value: string): string {
   return value.trim().replace(/\/+$/, "");
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, action: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${action}超时`)), timeoutMs);
+    promise.then(resolve, reject).finally(() => window.clearTimeout(timer));
+  });
 }
 
 export default class AndroidSocialSaver extends Plugin {
@@ -148,6 +158,10 @@ export default class AndroidSocialSaver extends Plugin {
     }
 
     if (apiBase(this.settings.parserUrl)) {
+      if (!this.settings.apiToken.trim()) {
+        new Notice("请先在插件设置中填写 NAS API Token");
+        return;
+      }
       new Notice("正在解析正文和媒体，请稍候…");
       try {
         const capture = await this.captureRemote(url);
@@ -173,21 +187,26 @@ export default class AndroidSocialSaver extends Plugin {
     const base = apiBase(this.settings.parserUrl);
     const headers: Record<string, string> = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
-    const start = await requestUrl({
+    const start = await withTimeout(requestUrl({
       url: `${base}/v1/captures`,
       method: "POST",
       contentType: "application/json",
       headers,
       body: JSON.stringify({ url }),
       throw: false
-    });
+    }), API_REQUEST_TIMEOUT_MS, "创建解析任务");
     if (start.status >= 400) throw new Error(this.apiError(start.json, start.status));
     const created = start.json as { jobId?: string; status?: string };
     if (!created.jobId) throw new Error("解析服务没有返回任务编号");
     const deadline = Date.now() + Math.max(10, this.settings.captureTimeoutSeconds) * 1000;
     while (Date.now() < deadline) {
       await sleep(2000);
-      const response = await requestUrl({ url: `${base}/v1/captures/${encodeURIComponent(created.jobId)}`, headers, throw: false });
+      const remaining = Math.max(1_000, deadline - Date.now());
+      const response = await withTimeout(
+        requestUrl({ url: `${base}/v1/captures/${encodeURIComponent(created.jobId)}`, headers, throw: false }),
+        Math.min(API_REQUEST_TIMEOUT_MS, remaining),
+        "查询解析任务"
+      );
       if (response.status >= 400) throw new Error(this.apiError(response.json, response.status));
       const status = response.json as { status?: string; error?: string; media?: CaptureMedia[] };
       if (status.status === "completed" && Array.isArray(status.media)) return status as CaptureResponse;
@@ -220,8 +239,9 @@ export default class AndroidSocialSaver extends Plugin {
     for (const media of capture.media || []) {
       if (media.type === "image" && !this.settings.downloadImages) continue;
       if (media.type === "video" && !this.settings.downloadVideos) continue;
-      if (media.type === "video" && (media.size || 0) > this.settings.maxVideoMb * 1024 * 1024) {
-        warnings.push(`视频 ${media.filename} 超过 ${this.settings.maxVideoMb} MB，已跳过`);
+      const maxVideoBytes = this.maxVideoBytes();
+      if (media.type === "video" && (media.size || 0) > maxVideoBytes) {
+        warnings.push(`视频 ${media.filename} 超过 ${Math.round(maxVideoBytes / 1024 / 1024)} MB，已跳过`);
         continue;
       }
       try {
@@ -284,11 +304,12 @@ export default class AndroidSocialSaver extends Plugin {
   private async downloadMedia(media: CaptureMedia, requestedPath: string): Promise<string> {
     const headers: Record<string, string> = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
-    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
-    const head = await requestUrl({ url: media.url, method: "HEAD", headers, throw: false });
+    const max = media.type === "video" ? this.maxVideoBytes() : 30 * 1024 * 1024;
+    if (media.size && media.size > max) throw new Error(`文件超过 ${Math.round(max / 1024 / 1024)} MB 限制`);
+    const head = await withTimeout(requestUrl({ url: media.url, method: "HEAD", headers, throw: false }), API_REQUEST_TIMEOUT_MS, "检查媒体大小");
     const advertisedSize = Number(head.headers["content-length"] || head.headers["Content-Length"] || 0);
     if (head.status < 400 && advertisedSize > max) throw new Error(`鏂囦欢瓒呰繃 ${Math.round(max / 1024 / 1024)} MB 闄愬埗`);
-    const response = await requestUrl({ url: media.url, headers, throw: false });
+    const response = await withTimeout(requestUrl({ url: media.url, headers, throw: false }), API_REQUEST_TIMEOUT_MS, "下载媒体");
     if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
     const bytes = response.arrayBuffer.byteLength;
     if (bytes > max) throw new Error(`文件超过 ${Math.round(max / 1024 / 1024)} MB 限制`);
@@ -299,6 +320,10 @@ export default class AndroidSocialSaver extends Plugin {
     while (this.app.vault.getAbstractFileByPath(path)) { path = `${stem}-${suffix}${extension}`; suffix += 1; }
     await this.app.vault.createBinary(path, response.arrayBuffer);
     return path;
+  }
+
+  private maxVideoBytes(): number {
+    return Math.min(Math.max(1, this.settings.maxVideoMb), MOBILE_MAX_VIDEO_MB) * 1024 * 1024;
   }
 
   private async createLinkNote(url: string, platform: "小红书" | "抖音", error?: string): Promise<void> {
@@ -354,6 +379,7 @@ export default class AndroidSocialSaver extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.maxVideoMb = Math.min(Math.max(1, Number(this.settings.maxVideoMb) || DEFAULT_SETTINGS.maxVideoMb), MOBILE_MAX_VIDEO_MB);
   }
 
   async saveSettings(): Promise<void> { await this.saveData(this.settings); }
@@ -382,9 +408,9 @@ class SocialSaverSettingTab extends PluginSettingTab {
       .setValue(this.plugin.settings.downloadImages).onChange(async (value) => { this.plugin.settings.downloadImages = value; await this.plugin.saveSettings(); }));
     new Setting(containerEl).setName("下载视频").addToggle((toggle) => toggle
       .setValue(this.plugin.settings.downloadVideos).onChange(async (value) => { this.plugin.settings.downloadVideos = value; await this.plugin.saveSettings(); }));
-    new Setting(containerEl).setName("视频大小上限（MB）").addText((text) => text
+    new Setting(containerEl).setName("视频大小上限（MB，最高 50）").addText((text) => text
       .setValue(String(this.plugin.settings.maxVideoMb)).onChange(async (value) => {
-        const parsed = Number(value); if (Number.isFinite(parsed) && parsed > 0) { this.plugin.settings.maxVideoMb = parsed; await this.plugin.saveSettings(); }
+        const parsed = Number(value); if (Number.isFinite(parsed) && parsed > 0) { this.plugin.settings.maxVideoMb = Math.min(parsed, MOBILE_MAX_VIDEO_MB); await this.plugin.saveSettings(); }
       }));
     new Setting(containerEl).setName("解析超时（秒）").addText((text) => text
       .setValue(String(this.plugin.settings.captureTimeoutSeconds)).onChange(async (value) => {

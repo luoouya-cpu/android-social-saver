@@ -29,8 +29,8 @@ obsidian://save-social?url=URL编码后的链接
 
 ```bash
 cd parser-service
-cp .env.example .env
-# 编辑 .env，设置一个随机 API_TOKEN
+# 编辑 docker-compose.yml：将 API_TOKEN 改成至少 32 位的随机字符串，
+# 并确认端口绑定使用 NAS 的固定局域网 IP。
 docker compose up -d --build
 ```
 
@@ -39,7 +39,7 @@ docker compose up -d --build
 - 解析服务地址：`http://NAS内网IP:3000`
 - API Token：`.env` 中的 `API_TOKEN`
 - 下载图片/视频：按需开启
-- 视频大小上限：默认 200 MB
+- 视频大小上限：默认 50 MB，手机端最高 50 MB
 
 服务健康检查：
 
@@ -49,7 +49,7 @@ http://NAS内网IP:3000/health
 
 当解析服务地址留空时，插件继续使用原来的链接保存模式。解析服务不可用或平台要求登录时，插件会创建 `status: needs-review` 的保底笔记。
 
-NAS 部署前可执行 `uname -m` 检查架构。`x86_64` 兼容性最好；ARM NAS 需要先确认 NAS 的 Docker/Chromium 支持情况。
+NAS 部署前可执行 `uname -m` 检查架构。`x86_64` 兼容性最好；ARM NAS 需要先确认 NAS 的 Docker/Chromium 支持情况。不要把 3000 端口映射到公网。
 
 ## 构建
 

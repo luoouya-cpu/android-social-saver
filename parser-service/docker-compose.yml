@@ -3,15 +3,20 @@ services:
     build: .
     container_name: social-capture
     init: true
-    ipc: host
+    shm_size: "1gb"
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # 仅绑定 NAS 的局域网地址；如 NAS IP 变化，请同步修改此处。
+      - "192.168.3.29:3000:3000"
     environment:
       PORT: 3000
-      # 请务必将下面的 Token 改成你自己的长随机字符串。
-      API_TOKEN: "change-this-to-a-long-random-token"
+      # 必须改为至少 32 位的随机字符串；保留占位值时服务会拒绝启动。
+      API_TOKEN: "REPLACE_WITH_A_LONG_RANDOM_TOKEN_BEFORE_DEPLOYING"
       MAX_CONCURRENT_CAPTURES: "1"
       MAX_QUEUED_CAPTURES: "8"
-      MAX_VIDEO_MB: "200"
+      MAX_VIDEO_MB: "50"
       MAX_IMAGE_MB: "30"
+      MEDIA_DIR: "/tmp/social-capture-media"
+      UPSTREAM_TIMEOUT_MS: "30000"

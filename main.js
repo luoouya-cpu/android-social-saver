@@ -31,9 +31,11 @@ var DEFAULT_SETTINGS = {
   apiToken: "",
   downloadImages: true,
   downloadVideos: true,
-  maxVideoMb: 200,
+  maxVideoMb: 50,
   captureTimeoutSeconds: 120
 };
+var MOBILE_MAX_VIDEO_MB = 50;
+var API_REQUEST_TIMEOUT_MS = 3e4;
 function platformFor(url) {
   try {
     const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
@@ -63,6 +65,12 @@ function sleep(ms) {
 }
 function apiBase(value) {
   return value.trim().replace(/\/+$/, "");
+}
+function withTimeout(promise, timeoutMs, action) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${action}\u8D85\u65F6`)), timeoutMs);
+    promise.then(resolve, reject).finally(() => window.clearTimeout(timer));
+  });
 }
 var AndroidSocialSaver = class extends import_obsidian.Plugin {
   constructor() {
@@ -118,6 +126,10 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
       return;
     }
     if (apiBase(this.settings.parserUrl)) {
+      if (!this.settings.apiToken.trim()) {
+        new import_obsidian.Notice("\u8BF7\u5148\u5728\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u586B\u5199 NAS API Token");
+        return;
+      }
       new import_obsidian.Notice("\u6B63\u5728\u89E3\u6790\u6B63\u6587\u548C\u5A92\u4F53\uFF0C\u8BF7\u7A0D\u5019\u2026");
       try {
         const capture = await this.captureRemote(url);
@@ -141,21 +153,26 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     const base = apiBase(this.settings.parserUrl);
     const headers = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
-    const start = await (0, import_obsidian.requestUrl)({
+    const start = await withTimeout((0, import_obsidian.requestUrl)({
       url: `${base}/v1/captures`,
       method: "POST",
       contentType: "application/json",
       headers,
       body: JSON.stringify({ url }),
       throw: false
-    });
+    }), API_REQUEST_TIMEOUT_MS, "\u521B\u5EFA\u89E3\u6790\u4EFB\u52A1");
     if (start.status >= 400) throw new Error(this.apiError(start.json, start.status));
     const created = start.json;
     if (!created.jobId) throw new Error("\u89E3\u6790\u670D\u52A1\u6CA1\u6709\u8FD4\u56DE\u4EFB\u52A1\u7F16\u53F7");
     const deadline = Date.now() + Math.max(10, this.settings.captureTimeoutSeconds) * 1e3;
     while (Date.now() < deadline) {
       await sleep(2e3);
-      const response = await (0, import_obsidian.requestUrl)({ url: `${base}/v1/captures/${encodeURIComponent(created.jobId)}`, headers, throw: false });
+      const remaining = Math.max(1e3, deadline - Date.now());
+      const response = await withTimeout(
+        (0, import_obsidian.requestUrl)({ url: `${base}/v1/captures/${encodeURIComponent(created.jobId)}`, headers, throw: false }),
+        Math.min(API_REQUEST_TIMEOUT_MS, remaining),
+        "\u67E5\u8BE2\u89E3\u6790\u4EFB\u52A1"
+      );
       if (response.status >= 400) throw new Error(this.apiError(response.json, response.status));
       const status = response.json;
       if (status.status === "completed" && Array.isArray(status.media)) return status;
@@ -186,8 +203,9 @@ var AndroidSocialSaver = class extends import_obsidian.Plugin {
     for (const media of capture.media || []) {
       if (media.type === "image" && !this.settings.downloadImages) continue;
       if (media.type === "video" && !this.settings.downloadVideos) continue;
-      if (media.type === "video" && (media.size || 0) > this.settings.maxVideoMb * 1024 * 1024) {
-        warnings.push(`\u89C6\u9891 ${media.filename} \u8D85\u8FC7 ${this.settings.maxVideoMb} MB\uFF0C\u5DF2\u8DF3\u8FC7`);
+      const maxVideoBytes = this.maxVideoBytes();
+      if (media.type === "video" && (media.size || 0) > maxVideoBytes) {
+        warnings.push(`\u89C6\u9891 ${media.filename} \u8D85\u8FC7 ${Math.round(maxVideoBytes / 1024 / 1024)} MB\uFF0C\u5DF2\u8DF3\u8FC7`);
         continue;
       }
       try {
@@ -254,11 +272,12 @@ ${sections.join("\n\n")}
   async downloadMedia(media, requestedPath) {
     const headers = {};
     if (this.settings.apiToken.trim()) headers.Authorization = `Bearer ${this.settings.apiToken.trim()}`;
-    const max = media.type === "video" ? this.settings.maxVideoMb * 1024 * 1024 : 30 * 1024 * 1024;
-    const head = await (0, import_obsidian.requestUrl)({ url: media.url, method: "HEAD", headers, throw: false });
+    const max = media.type === "video" ? this.maxVideoBytes() : 30 * 1024 * 1024;
+    if (media.size && media.size > max) throw new Error(`\u6587\u4EF6\u8D85\u8FC7 ${Math.round(max / 1024 / 1024)} MB \u9650\u5236`);
+    const head = await withTimeout((0, import_obsidian.requestUrl)({ url: media.url, method: "HEAD", headers, throw: false }), API_REQUEST_TIMEOUT_MS, "\u68C0\u67E5\u5A92\u4F53\u5927\u5C0F");
     const advertisedSize = Number(head.headers["content-length"] || head.headers["Content-Length"] || 0);
     if (head.status < 400 && advertisedSize > max) throw new Error(`\u93C2\u56E6\u6B22\u74D2\u5470\u7E43 ${Math.round(max / 1024 / 1024)} MB \u95C4\u612C\u57D7`);
-    const response = await (0, import_obsidian.requestUrl)({ url: media.url, headers, throw: false });
+    const response = await withTimeout((0, import_obsidian.requestUrl)({ url: media.url, headers, throw: false }), API_REQUEST_TIMEOUT_MS, "\u4E0B\u8F7D\u5A92\u4F53");
     if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
     const bytes = response.arrayBuffer.byteLength;
     if (bytes > max) throw new Error(`\u6587\u4EF6\u8D85\u8FC7 ${Math.round(max / 1024 / 1024)} MB \u9650\u5236`);
@@ -272,6 +291,9 @@ ${sections.join("\n\n")}
     }
     await this.app.vault.createBinary(path, response.arrayBuffer);
     return path;
+  }
+  maxVideoBytes() {
+    return Math.min(Math.max(1, this.settings.maxVideoMb), MOBILE_MAX_VIDEO_MB) * 1024 * 1024;
   }
   async createLinkNote(url, platform, error) {
     const { day, stamp } = dateParts();
@@ -338,6 +360,7 @@ ${this.settings.includeTimestamp ? `\u4FDD\u5B58\u65F6\u95F4\uFF1A${stamp}
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.settings.maxVideoMb = Math.min(Math.max(1, Number(this.settings.maxVideoMb) || DEFAULT_SETTINGS.maxVideoMb), MOBILE_MAX_VIDEO_MB);
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -378,10 +401,10 @@ var SocialSaverSettingTab = class extends import_obsidian.PluginSettingTab {
       this.plugin.settings.downloadVideos = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("\u89C6\u9891\u5927\u5C0F\u4E0A\u9650\uFF08MB\uFF09").addText((text) => text.setValue(String(this.plugin.settings.maxVideoMb)).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("\u89C6\u9891\u5927\u5C0F\u4E0A\u9650\uFF08MB\uFF0C\u6700\u9AD8 50\uFF09").addText((text) => text.setValue(String(this.plugin.settings.maxVideoMb)).onChange(async (value) => {
       const parsed = Number(value);
       if (Number.isFinite(parsed) && parsed > 0) {
-        this.plugin.settings.maxVideoMb = parsed;
+        this.plugin.settings.maxVideoMb = Math.min(parsed, MOBILE_MAX_VIDEO_MB);
         await this.plugin.saveSettings();
       }
     }));
