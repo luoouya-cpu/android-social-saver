@@ -11,6 +11,6 @@ parser-service-nas-flat.zip
 obsidian-plugin-update.zip
 parser-service-nas/
 parser-service-nas-flat*/
-obsidian-plugin-update/
+obsidian-plugin-update*/
 .nas-package/
 .nas-package-flat/
