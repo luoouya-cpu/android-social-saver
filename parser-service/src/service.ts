@@ -19,7 +19,7 @@ export function isPublicHttpUrl(value: string): boolean {
 export function normalizedUrl(value: string): string | undefined {
   const match = value.match(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
   if (!match) return undefined;
-  const candidate = match[0].replace(/[),.;!?，。！？]+$/, "");
+  const candidate = match[0].replace(/[),.;!?，。！？\]}>"'`]+$/, "");
   const url = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
   return isPublicHttpUrl(url) ? url : undefined;
 }
@@ -59,6 +59,9 @@ export class CaptureService {
       await page.waitForTimeout(1_500);
       const finalUrl = page.url();
       if (!adapterForUrl(finalUrl)) throw new Error("链接跳转到了不受支持的域名");
+      if (new URL(finalUrl).pathname === "/") {
+        throw new Error("短链接没有跳转到具体笔记页面；可能已失效、需要登录或被平台拦截");
+      }
       const snapshot = addScriptMediaCandidates(await snapshotPage(page));
       const extracted = adapter.extract(snapshot, finalUrl);
       if (!extracted.title && !extracted.content) warnings.push("页面未提取到正文，可能需要登录或触发了平台保护");

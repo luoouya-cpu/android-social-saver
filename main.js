@@ -48,7 +48,7 @@ function platformFor(url) {
 function extractUrl(rawUrl) {
   const match = rawUrl.match(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
   if (!match) return void 0;
-  const candidate = match[0].replace(/[),.;!?，。！？]+$/, "");
+  const candidate = match[0].replace(/[),.;!?，。！？\]}>"'`]+$/, "");
   return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
 }
 function safeName(value) {

@@ -69,7 +69,7 @@ function platformFor(url: string): Platform {
 function extractUrl(rawUrl: string): string | undefined {
   const match = rawUrl.match(/(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:xiaohongshu\.com|xhslink\.com|xhslink\.cn|douyin\.com|iesdouyin\.com)\/[^\s]+/i);
   if (!match) return undefined;
-  const candidate = match[0].replace(/[),.;!?，。！？]+$/, "");
+  const candidate = match[0].replace(/[),.;!?，。！？\]}>"'`]+$/, "");
   return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
 }
 

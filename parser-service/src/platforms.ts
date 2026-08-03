@@ -110,10 +110,17 @@ function genericExtract(snapshot: PageSnapshot, pageUrl: string, platform: Platf
     title: clean(title).slice(0, 200),
     author: clean(structured.author || snapshot.author).slice(0, 100),
     content: clean(content).slice(0, 30000),
-    publishedAt: structured.publishedAt || snapshot.publishedAt,
+    publishedAt: normalizedPublishedAt(structured.publishedAt || snapshot.publishedAt),
     tags: [],
     media
   };
+}
+
+function normalizedPublishedAt(value: string): string {
+  if (!/^\d{10,13}$/.test(value)) return value;
+  const timestamp = Number(value.length === 10 ? `${value}000` : value);
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
 }
 
 function scriptField(scripts: string[], keys: string[]): string {
@@ -129,17 +136,25 @@ function hashtags(content: string): string[] {
   return dedupe([...content.matchAll(/#([^#\s，。！？!?]{1,30})/g)].map((match) => match[1].trim()));
 }
 
+function isVideoNote(snapshot: PageSnapshot, pageUrl: string): boolean {
+  return /(?:[?&]type=video(?:&|$)|\/video\/)/i.test(pageUrl) ||
+    snapshot.videos.length > 0 ||
+    snapshot.scripts.some((script) => /(?:noteType|type)["']?\s*[:=]\s*["']?video/i.test(script));
+}
+
 const xhsAdapter: PlatformAdapter = {
   platform: "小红书",
   matches: (host) => host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") || host === "xhslink.com" || host.endsWith(".xhslink.com") || host === "xhslink.cn" || host.endsWith(".xhslink.cn"),
   extract: (snapshot, pageUrl) => {
     const result = genericExtract(snapshot, pageUrl, "小红书");
     const content = scriptField(snapshot.scripts, ["desc", "noteDesc", "description", "content"]) || result.content;
+    const videoNote = isVideoNote(snapshot, pageUrl);
     return {
       ...result,
       title: scriptField(snapshot.scripts, ["title", "noteTitle", "displayTitle"]) || result.title,
       author: scriptField(snapshot.scripts, ["nickname", "userName", "author"]) || result.author,
       content,
+      media: videoNote ? result.media.filter((media) => media.type === "video") : result.media,
       tags: hashtags(content)
     };
   }

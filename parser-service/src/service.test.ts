@@ -6,6 +6,7 @@ import { adapterForUrl, snapshotPage } from "./platforms.js";
 test("normalizes supported long and short links", () => {
   assert.equal(normalizedUrl("讲真的 http://xhslink.cn/o/abc 前往小红书"), "http://xhslink.cn/o/abc");
   assert.equal(normalizedUrl("https://v.douyin.com/abc/"), "https://v.douyin.com/abc/");
+  assert.equal(normalizedUrl('http://xhslink.cn/o/abc">'), "http://xhslink.cn/o/abc");
 });
 
 test("rejects unsupported and private URLs", () => {
@@ -37,6 +38,25 @@ test("extracts platform fields from embedded page data", () => {
   assert.equal(result.author, "小明");
   assert.equal(result.content, "上海周末路线 #旅行 #美食");
   assert.deepEqual(result.tags, ["旅行", "美食"]);
+});
+
+test("does not attach page images to a video note", () => {
+  const adapter = adapterForUrl("https://www.xiaohongshu.com/explore/abc?type=video");
+  assert.ok(adapter);
+  const result = adapter.extract({
+    title: "视频笔记",
+    description: "",
+    author: "",
+    publishedAt: "1785672088000",
+    bodyText: "",
+    images: ["https://example.xhscdn.com/cover.jpg"],
+    videos: ["https://example.xhscdn.com/video.mp4"],
+    scripts: [],
+    jsonLd: []
+  }, "https://www.xiaohongshu.com/explore/abc?type=video");
+  assert.equal(result.media.some((media) => media.type === "image"), false);
+  assert.equal(result.media.some((media) => media.type === "video"), true);
+  assert.equal(result.publishedAt, "2026-08-02T12:01:28.000Z");
 });
 
 test("runs page snapshot code without build-time helpers", async () => {
